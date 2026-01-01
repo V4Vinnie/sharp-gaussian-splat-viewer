@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sharp Gaussian Splat Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            width: 100%;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 30px;
+            overflow: hidden;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 60px;
+            text-align: center;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 30px;
+        }
+
+        .upload-area:hover {
+            background: #e9ecef;
+            border-color: #764ba2;
+        }
+
+        .upload-area.dragover {
+            background: #e7f3ff;
+            border-color: #667eea;
+            transform: scale(1.02);
+        }
+
+        .upload-area.hidden {
+            display: none;
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+
+        .upload-text {
+            font-size: 1.3em;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .upload-hint {
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .viewer-container {
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            background: #000;
+            border-radius: 15px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .viewer-container.active {
+            display: flex;
+        }
+
+        .viewer-image {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #1a1a1a;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 25px;
+            border-radius: 10px;
+            color: white;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .control-label {
+            font-size: 0.8em;
+            opacity: 0.8;
+        }
+
+        .control-value {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            display: none;
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .error.active {
+            display: block;
+        }
+
+        .info-panel {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+            color: #495057;
+        }
+
+        .info-panel strong {
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 Sharp Gaussian Splat Viewer</h1>
+            <p>Upload an image to generate an interactive 3D Gaussian splat</p>
+        </div>
+        
+        <div class="content">
+            <div class="error" id="error"></div>
+            
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📸</div>
+                <div class="upload-text">Drop an image here or click to browse</div>
+                <div class="upload-hint">Supports JPG, PNG, and other common image formats</div>
+                <input type="file" id="fileInput" accept="image/*">
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Processing image and generating Gaussian splat...</p>
+                <p style="font-size: 0.9em; color: #6c757d; margin-top: 10px;">This may take a few seconds</p>
+            </div>
+
+            <div class="info-panel" id="infoPanel" style="display: none;">
+                <strong>Navigation:</strong> Click and drag to rotate, scroll to zoom, or use the controls below
+            </div>
+
+            <div class="viewer-container" id="viewerContainer">
+                <canvas id="gaussianCanvas" style="width: 100%; height: 100%; display: block;"></canvas>
+                <div class="controls">
+                    <div class="control-group">
+                        <div class="control-label">Camera Position</div>
+                        <div class="control-value" id="cameraInfo">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script src="/static/viewer.js"></script>
+    <script>
+        const API_BASE = '';
+        let sessionId = null;
+        let viewer = null;
+
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const viewerContainer = document.getElementById('viewerContainer');
+        const canvas = document.getElementById('gaussianCanvas');
+        const infoPanel = document.getElementById('infoPanel');
+        
+        // Initialize viewer after DOM is ready
+        function initViewer() {
+            if (canvas && typeof THREE !== 'undefined' && typeof GaussianSplatViewer !== 'undefined') {
+                try {
+                    viewer = new GaussianSplatViewer(canvas);
+                    console.log('Viewer initialized successfully');
+                } catch (err) {
+                    console.error('Failed to initialize viewer:', err);
+                    showError('Failed to initialize 3D viewer: ' + err.message);
+                }
+            } else {
+                console.error('Missing dependencies:', {
+                    canvas: !!canvas,
+                    THREE: typeof THREE !== 'undefined',
+                    GaussianSplatViewer: typeof GaussianSplatViewer !== 'undefined'
+                });
+            }
+        }
+        
+        // Wait for scripts to load
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initViewer);
+        } else {
+            // DOM already loaded, but wait a bit for scripts
+            setTimeout(initViewer, 100);
+        }
+
+        // Check system capabilities on load
+        async function checkSystem() {
+            try {
+                const response = await fetch(`${API_BASE}/api/check`);
+                const data = await response.json();
+                // Note: Browser rendering works on all systems, CUDA is only for server-side rendering
+            } catch (err) {
+                console.error('Failed to check system:', err);
+            }
+        }
+        checkSystem();
+
+        // Upload area click
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        async function handleFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showError('Please select an image file');
+                return;
+            }
+
+            hideError();
+            uploadArea.classList.add('hidden');
+            loading.classList.add('active');
+            viewerContainer.classList.remove('active');
+            infoPanel.style.display = 'none';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/api/upload`, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to process image');
+                }
+
+                const data = await response.json();
+                sessionId = data.session_id;
+                
+                loading.innerHTML = '<div class="spinner"></div><p>Loading Gaussian splat...</p>';
+                
+                // Load PLY file in browser
+                if (viewer && data.ply_path) {
+                    try {
+                        await viewer.loadPLY(data.ply_path);
+                        hideError();
+                    } catch (loadError) {
+                        console.error('Error loading PLY:', loadError);
+                        showError('Failed to load Gaussian splat: ' + loadError.message);
+                        loading.classList.remove('active');
+                        uploadArea.classList.remove('hidden');
+                        return;
+                    }
+                } else {
+                    showError('Viewer not initialized or PLY path missing');
+                    loading.classList.remove('active');
+                    uploadArea.classList.remove('hidden');
+                    return;
+                }
+                
+                loading.classList.remove('active');
+                uploadArea.classList.add('hidden');
+                viewerContainer.classList.add('active');
+                infoPanel.style.display = 'block';
+                
+                // Update camera info
+                if (viewer) {
+                    updateCameraInfo();
+                }
+            } catch (err) {
+                console.error('Error:', err);
+                showError(err.message || 'Failed to process image. Please try again.');
+                loading.classList.remove('active');
+                uploadArea.classList.remove('hidden');
+            }
+        }
+
+        function updateCameraInfo() {
+            if (viewer) {
+                const info = document.getElementById('cameraInfo');
+                if (info) {
+                    info.textContent = viewer.getCameraInfo();
+                }
+            }
+        }
+        
+        // Update camera info periodically and on camera changes
+        setInterval(updateCameraInfo, 100);
+        
+        // Also update when controls change (if OrbitControls is available)
+        if (viewer && viewer.controls) {
+            viewer.controls.addEventListener('change', updateCameraInfo);
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.classList.add('active');
+        }
+
+        function hideError() {
+            error.classList.remove('active');
+        }
+    </script>
+</body>
+</html>
+
