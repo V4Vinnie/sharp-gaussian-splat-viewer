@@ -4,10 +4,10 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt && cd webapp && pip install -r requirements.txt
-    startCommand: cd webapp && PYTHONPATH=/opt/render/project/src uvicorn app:app --host 0.0.0.0 --port $PORT
+    startCommand: cd webapp && uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: PYTHONPATH
-        value: /opt/render/project/src
+        value: /opt/render/project/src:/opt/render/project
 
