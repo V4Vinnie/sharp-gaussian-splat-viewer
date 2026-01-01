@@ -3,8 +3,8 @@ services:
     name: sharp-gaussian-splat
     env: python
     plan: free
-    buildCommand: cd webapp && pip install -r requirements.txt
-    startCommand: cd webapp && uvicorn app:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt && cd webapp && pip install -r requirements.txt
+    startCommand: cd webapp && PYTHONPATH=/opt/render/project/src uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
