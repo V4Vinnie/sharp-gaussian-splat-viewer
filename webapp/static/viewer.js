@@ -288,11 +288,11 @@ class GaussianSplatViewer {
             const rawMaxDim = Math.max(size.x, size.y, size.z);
             console.log('Raw max dimension:', rawMaxDim);
             
-            // If the size seems unreasonable (too large), the binary parsing is likely wrong
-            // Filter positions to reasonable range and recompute bounding box
+            // If the size seems unreasonable (too large), filter positions aggressively
             let distance;
-            if (rawMaxDim > 100 || !isFinite(rawMaxDim) || rawMaxDim < 0.01) {
-                console.warn('Scene size seems unreasonable (>100 units), filtering positions and recomputing...');
+            let maxDim;
+            if (rawMaxDim > 50 || !isFinite(rawMaxDim) || rawMaxDim < 0.01) {
+                console.warn(`Scene size seems unreasonable (${rawMaxDim} units), filtering positions aggressively...`);
                 
                 // Filter positions to reasonable range and recompute
                 const positions = geometry.attributes.position.array;
@@ -300,20 +300,26 @@ class GaussianSplatViewer {
                 const filteredColors = [];
                 const colors = geometry.attributes.color.array;
                 
+                // Use a more aggressive filter - only keep positions in a reasonable range
+                const maxReasonable = 50; // Only keep positions within 50 units
+                let filteredCount = 0;
+                
                 for (let i = 0; i < positions.length; i += 3) {
                     const x = positions[i];
                     const y = positions[i + 1];
                     const z = positions[i + 2];
                     
                     // Only keep positions in reasonable range
-                    if (Math.abs(x) < 50 && Math.abs(y) < 50 && Math.abs(z) < 50) {
+                    if (Math.abs(x) < maxReasonable && Math.abs(y) < maxReasonable && Math.abs(z) < maxReasonable &&
+                        isFinite(x) && isFinite(y) && isFinite(z)) {
                         filteredPositions.push(x, y, z);
                         filteredColors.push(colors[i], colors[i+1], colors[i+2]);
+                        filteredCount++;
                     }
                 }
                 
                 if (filteredPositions.length > 0) {
-                    console.log(`Filtered from ${positions.length/3} to ${filteredPositions.length/3} positions`);
+                    console.log(`Filtered from ${positions.length/3} to ${filteredCount} positions (kept ${(filteredCount/(positions.length/3)*100).toFixed(1)}%)`);
                     
                     // Update geometry with filtered data
                     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(filteredPositions), 3));
@@ -330,17 +336,18 @@ class GaussianSplatViewer {
                     size.copy(newSize);
                     
                     const newMaxDim = Math.max(size.x, size.y, size.z);
-                    const maxDim = Math.min(Math.max(newMaxDim, 0.1), 50);
+                    maxDim = Math.min(Math.max(newMaxDim, 0.1), 50);
                     distance = Math.max(maxDim * 1.5, 0.5);
                     distance = Math.min(distance, 10.0);
                     
                     console.log('After filtering - center:', center, 'size:', size, 'distance:', distance);
                 } else {
-                    console.error('No valid positions after filtering!');
+                    console.error('No valid positions after filtering! Using default camera.');
+                    maxDim = 2.0;
                     distance = 3.0;
                 }
             } else {
-                const maxDim = Math.min(Math.max(rawMaxDim, 0.1), 50); // Clamp between 0.1 and 50
+                maxDim = Math.min(Math.max(rawMaxDim, 0.1), 50); // Clamp between 0.1 and 50
                 distance = Math.max(maxDim * 1.5, 0.5);
                 distance = Math.min(distance, 10.0);
             }
@@ -658,12 +665,12 @@ class GaussianSplatViewer {
         const propertySizes = properties.map((prop, idx) => {
             const type = prop.type.toLowerCase();
             // Handle 'f4' format from Sharp (numpy dtype format)
-            if (type === 'f4' || type === 'float32') return 4;
+            if (type === 'f4' || type === 'float32' || type === 'float') return 4;
             // Standard PLY format types
             switch(type) {
                 case 'char': case 'uchar': case 'int8': case 'uint8': return 1;
                 case 'short': case 'ushort': case 'int16': case 'uint16': return 2;
-                case 'int': case 'uint': case 'float': case 'int32': case 'uint32': return 4;
+                case 'int': case 'uint': case 'int32': case 'uint32': return 4;
                 case 'double': case 'float64': return 8;
                 default: 
                     console.warn(`Unknown property type '${type}' for property ${idx} (${prop.name}), defaulting to 4 bytes`);
@@ -674,6 +681,14 @@ class GaussianSplatViewer {
         const vertexSize = propertySizes.reduce((a, b) => a + b, 0);
         console.log('Vertex size:', vertexSize, 'bytes');
         console.log('Property sizes:', propertySizes);
+        console.log('Properties:', properties.map(p => `${p.name}(${p.type})`).join(', '));
+        
+        // Verify: Sharp should have 14 properties = 56 bytes per vertex
+        // x, y, z, f_dc_0, f_dc_1, f_dc_2, opacity, scale_0, scale_1, scale_2, rot_0, rot_1, rot_2, rot_3
+        const expectedSharpProperties = 14;
+        if (properties.length !== expectedSharpProperties) {
+            console.warn(`Expected ${expectedSharpProperties} properties for Sharp PLY, but found ${properties.length}`);
+        }
         
         const positions = [];
         const colors = [];
@@ -701,6 +716,7 @@ class GaussianSplatViewer {
             
             let testOffset = 0;
             console.log('Testing with current endianness (little=' + isLittleEndian + '):');
+            let foundGoodEndianness = false;
             for (let j = 0; j < Math.min(6, properties.length); j++) {
                 const size = propertySizes[j];
                 if (testOffset + size <= testView.byteLength) {
@@ -715,9 +731,26 @@ class GaussianSplatViewer {
                         value = isLittleEndian ? testView.getUint16(testOffset, true) : testView.getUint16(testOffset, false);
                         altValue = isLittleEndian ? testView.getUint16(testOffset, false) : testView.getUint16(testOffset, true);
                     }
-                    const reasonable = Math.abs(value) < 100;
-                    const altReasonable = Math.abs(altValue) < 100;
-                    console.log(`  Property ${j} (${properties[j].name}): ${value} ${reasonable ? '✓' : '✗'} | alt: ${altValue} ${altReasonable ? '✓' : '✗'}`);
+                    const reasonable = Math.abs(value) < 100 && isFinite(value);
+                    const altReasonable = Math.abs(altValue) < 100 && isFinite(altValue);
+                    
+                    // Check if this is a position property (x, y, z)
+                    const isPosition = ['x', 'y', 'z'].includes(properties[j].name);
+                    
+                    if (isPosition) {
+                        if (altReasonable && !reasonable) {
+                            console.warn(`  Property ${j} (${properties[j].name}): WRONG ENDIANNESS! Current: ${value}, Correct: ${altValue}`);
+                            if (!foundGoodEndianness) {
+                                console.warn('  → Switching to opposite endianness for all reads');
+                                isLittleEndian = !isLittleEndian;
+                                foundGoodEndianness = true;
+                            }
+                        } else if (reasonable) {
+                            console.log(`  Property ${j} (${properties[j].name}): ${value} ✓`);
+                        }
+                    } else {
+                        console.log(`  Property ${j} (${properties[j].name}): ${value} ${reasonable ? '✓' : '✗'} | alt: ${altValue} ${altReasonable ? '✓' : '✗'}`);
+                    }
                     testOffset += size;
                 }
             }
@@ -732,8 +765,53 @@ class GaussianSplatViewer {
         // Create a single DataView for the entire data section
         const dataView = new DataView(arrayBuffer, dataStart, Math.min(totalSize, availableSize));
         
-        // Track if we need to switch endianness (will be set during first few vertex reads)
+        // Pre-check endianness by testing first few vertices - check ALL properties, not just positions
         let endiannessSwitched = false;
+        if (vertexCount > 0 && vertexSize <= dataView.byteLength) {
+            console.log('Pre-checking endianness with first 10 vertices (checking all properties)...');
+            let goodWithCurrent = 0;
+            let goodWithOpposite = 0;
+            
+            for (let testI = 0; testI < Math.min(10, vertexCount); testI++) {
+                const testOffset = testI * vertexSize;
+                let currentGood = true;
+                let oppositeGood = true;
+                
+                // Test a few key properties with both endianness
+                for (let testProp = 0; testProp < Math.min(6, properties.length); testProp++) {
+                    const propOffset = testProp * 4; // All are 4 bytes (f4)
+                    const readOffset = testOffset + propOffset;
+                    
+                    if (readOffset + 4 <= dataView.byteLength) {
+                        // Current endianness
+                        const v1 = isLittleEndian ? dataView.getFloat32(readOffset, true) : dataView.getFloat32(readOffset, false);
+                        // Opposite endianness
+                        const v2 = !isLittleEndian ? dataView.getFloat32(readOffset, true) : dataView.getFloat32(readOffset, false);
+                        
+                        // Check if reasonable (allow larger values for some properties)
+                        const maxReasonable = properties[testProp].name.startsWith('rot_') ? 10 : 1000;
+                        const r1 = isFinite(v1) && Math.abs(v1) < maxReasonable;
+                        const r2 = isFinite(v2) && Math.abs(v2) < maxReasonable;
+                        
+                        if (!r1) currentGood = false;
+                        if (!r2) oppositeGood = false;
+                    }
+                }
+                
+                if (currentGood) goodWithCurrent++;
+                if (oppositeGood) goodWithOpposite++;
+            }
+            
+            console.log(`Endianness test: Current (${isLittleEndian ? 'little' : 'big'}): ${goodWithCurrent}/10 good, Opposite: ${goodWithOpposite}/10 good`);
+            
+            if (goodWithOpposite > goodWithCurrent && goodWithOpposite >= 5) {
+                console.warn(`⚠️ Switching to opposite endianness! (${!isLittleEndian ? 'little' : 'big'})`);
+                isLittleEndian = !isLittleEndian;
+                endiannessSwitched = true;
+            } else if (goodWithCurrent < 5 && goodWithOpposite < 5) {
+                console.warn('⚠️ Both endianness options give poor results. File format might be different than expected.');
+            }
+        }
         
         for (let i = 0; i < vertexCount; i++) {
             const vertexOffset = i * vertexSize;
@@ -747,6 +825,7 @@ class GaussianSplatViewer {
             // Read all properties for this vertex
             const values = [];
             let propOffset = 0;
+            let hasInvalidValue = false;
             
             for (let j = 0; j < properties.length; j++) {
                 const size = propertySizes[j];
@@ -754,7 +833,7 @@ class GaussianSplatViewer {
                 
                 // Check bounds
                 if (readOffset + size > dataView.byteLength) {
-                    console.warn(`Property ${j} would exceed buffer at vertex ${i}`);
+                    hasInvalidValue = true;
                     break;
                 }
                 
@@ -764,6 +843,33 @@ class GaussianSplatViewer {
                         // All Sharp properties are float32 (f4)
                         // Use the (possibly corrected) endianness
                         value = isLittleEndian ? dataView.getFloat32(readOffset, true) : dataView.getFloat32(readOffset, false);
+                        
+                        // Validate value based on property type
+                        const propName = properties[j].name;
+                        let maxReasonable = 1e10; // Default very large
+                        
+                        // Set reasonable limits based on property type - be more strict
+                        if (propName === 'x' || propName === 'y' || propName === 'z') {
+                            maxReasonable = 50; // Positions should be reasonable (tightened from 1000)
+                        } else if (propName.startsWith('f_dc_')) {
+                            maxReasonable = 10; // Spherical harmonics coefficients (tightened from 100)
+                        } else if (propName === 'opacity') {
+                            maxReasonable = 10; // Opacity (will be sigmoid'd) (tightened from 100)
+                        } else if (propName.startsWith('scale_')) {
+                            maxReasonable = 10; // Scales (tightened from 100)
+                        } else if (propName.startsWith('rot_')) {
+                            maxReasonable = 2; // Quaternion components should be normalized (tightened from 10)
+                        }
+                        
+                        // Check if value is reasonable
+                        if (!isFinite(value) || Math.abs(value) > maxReasonable) {
+                            hasInvalidValue = true;
+                            // Only log first few to avoid spam
+                            if (i < 3 && j < 6) {
+                                console.warn(`Skipping vertex ${i} - invalid ${propName}: ${value} (max: ${maxReasonable})`);
+                            }
+                            break; // Skip this vertex entirely
+                        }
                     } else if (size === 1) {
                         value = dataView.getUint8(readOffset);
                     } else if (size === 2) {
@@ -772,13 +878,20 @@ class GaussianSplatViewer {
                         value = isLittleEndian ? dataView.getFloat64(readOffset, true) : dataView.getFloat64(readOffset, false);
                     }
                 } catch (e) {
-                    console.error(`Error reading property ${j} (${properties[j].name}) at vertex ${i}:`, e);
-                    console.error(`Read offset: ${readOffset}, size: ${size}, buffer length: ${dataView.byteLength}`);
-                    throw e;
+                    hasInvalidValue = true;
+                    if (i < 5) {
+                        console.error(`Error reading property ${j} (${properties[j].name}) at vertex ${i}:`, e);
+                    }
+                    break;
                 }
                 
                 values.push(value);
                 propOffset += size;
+            }
+            
+            // Skip this vertex if it has any invalid values
+            if (hasInvalidValue || values.length !== properties.length) {
+                continue;
             }
             
             // Extract position
@@ -787,22 +900,26 @@ class GaussianSplatViewer {
                 let y = values[yIdx];
                 let z = values[zIdx];
                 
-                // Try opposite endianness if values seem wrong (too large)
-                // Gaussian splats typically have positions in a reasonable range (e.g., -50 to 50 meters)
-                // But Sharp might use a different coordinate system, so allow up to 100
-                if (Math.abs(x) > 100 || Math.abs(y) > 100 || Math.abs(z) > 100) {
+                // Validate position values - they should be reasonable
+                // If values are way too large, try opposite endianness (only for first few vertices)
+                const maxReasonable = 1000; // Allow up to 1000 units
+                if ((Math.abs(x) > maxReasonable || Math.abs(y) > maxReasonable || Math.abs(z) > maxReasonable) && i < 10) {
                     // Values are suspiciously large - try reading with opposite endianness
                     const posOffset = vertexOffset + (xIdx * 4);
-                    if (posOffset + 12 <= dataView.byteLength && i < 10) {
+                    if (posOffset + 12 <= dataView.byteLength) {
                         const testX = !isLittleEndian ? dataView.getFloat32(posOffset, true) : dataView.getFloat32(posOffset, false);
                         const testY = !isLittleEndian ? dataView.getFloat32(posOffset + 4, true) : dataView.getFloat32(posOffset + 4, false);
                         const testZ = !isLittleEndian ? dataView.getFloat32(posOffset + 8, true) : dataView.getFloat32(posOffset + 8, false);
                         
-                        if (Math.abs(testX) < Math.abs(x) && Math.abs(testY) < Math.abs(y) && Math.abs(testZ) < Math.abs(z)) {
-                            // Opposite endianness gives smaller (more reasonable) values
+                        // Check if opposite endianness gives more reasonable values
+                        const originalMax = Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
+                        const testMax = Math.max(Math.abs(testX), Math.abs(testY), Math.abs(testZ));
+                        
+                        if (testMax < originalMax && testMax < maxReasonable && isFinite(testX) && isFinite(testY) && isFinite(testZ)) {
+                            // Opposite endianness is better
                             if (!endiannessSwitched) {
-                                console.warn(`Endianness appears wrong! Original: (${x}, ${y}, ${z}), Corrected: (${testX}, ${testY}, ${testZ})`);
-                                console.warn('Switching to opposite endianness for all subsequent reads');
+                                console.warn(`⚠️ Endianness is WRONG! Switching from ${isLittleEndian ? 'little' : 'big'} to ${!isLittleEndian ? 'little' : 'big'}`);
+                                console.warn(`Example - Original: (${x}, ${y}, ${z}), Corrected: (${testX}, ${testY}, ${testZ})`);
                                 endiannessSwitched = true;
                                 isLittleEndian = !isLittleEndian;
                             }
@@ -813,7 +930,8 @@ class GaussianSplatViewer {
                     }
                 }
                 
-                // Validate values are reasonable
+                // Validate values are reasonable - filter out extremely large values
+                // After endianness correction, filter out any remaining bad values
                 const isValid = (v) => !isNaN(v) && isFinite(v) && Math.abs(v) < 1000;
                 
                 if (isValid(x) && isValid(y) && isValid(z)) {
@@ -848,10 +966,27 @@ class GaussianSplatViewer {
             }
         }
         
-        console.log('Parsed', positions.length / 3, 'vertices from binary PLY');
+        const validVertexCount = positions.length / 3;
+        console.log(`Parsed ${validVertexCount} valid vertices from binary PLY (out of ${vertexCount} total)`);
         
-        if (positions.length === 0) {
-            throw new Error('No valid positions found in PLY file');
+        if (validVertexCount === 0) {
+            throw new Error('No valid positions found in PLY file. This might indicate endianness or format issues.');
+        }
+        
+        // Log statistics about the parsed data
+        if (validVertexCount > 0) {
+            let minX = Infinity, maxX = -Infinity;
+            let minY = Infinity, maxY = -Infinity;
+            let minZ = Infinity, maxZ = -Infinity;
+            for (let i = 0; i < positions.length; i += 3) {
+                minX = Math.min(minX, positions[i]);
+                maxX = Math.max(maxX, positions[i]);
+                minY = Math.min(minY, positions[i+1]);
+                maxY = Math.max(maxY, positions[i+1]);
+                minZ = Math.min(minZ, positions[i+2]);
+                maxZ = Math.max(maxZ, positions[i+2]);
+            }
+            console.log(`Position ranges - X: [${minX.toFixed(2)}, ${maxX.toFixed(2)}], Y: [${minY.toFixed(2)}, ${maxY.toFixed(2)}], Z: [${minZ.toFixed(2)}, ${maxZ.toFixed(2)}]`);
         }
         
         return { positions, colors };

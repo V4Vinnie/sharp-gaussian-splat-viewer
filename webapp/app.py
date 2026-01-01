@@ -73,9 +73,12 @@ def load_model():
     logger.info(f"Loading model on device: {device}")
 
     # Download or load checkpoint
+    # Note: Model is ~1.6GB, downloads to ~/.cache/torch/hub/checkpoints/
+    # This happens once and is cached. See HOSTING_LARGE_MODEL.md for optimization options.
     try:
-        logger.info("Downloading default model...")
+        logger.info("Downloading default model (~1.6GB, may take several minutes on first run)...")
         state_dict = torch.hub.load_state_dict_from_url(DEFAULT_MODEL_URL, progress=True)
+        logger.info("Model download complete!")
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
         raise
