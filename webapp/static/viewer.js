@@ -1015,5 +1015,116 @@ class GaussianSplatViewer {
         }
         return `(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`;
     }
+    
+    // Get the scene center for rotation
+    getSceneCenter() {
+        if (!this.points || this.points.geometry.attributes.position.count === 0) {
+            return new THREE.Vector3(0, 0, 0);
+        }
+        
+        const positions = this.points.geometry.attributes.position.array;
+        let sumX = 0, sumY = 0, sumZ = 0;
+        const count = positions.length / 3;
+        
+        for (let i = 0; i < positions.length; i += 3) {
+            sumX += positions[i];
+            sumY += positions[i + 1];
+            sumZ += positions[i + 2];
+        }
+        
+        return new THREE.Vector3(sumX / count, sumY / count, sumZ / count);
+    }
+    
+    // Record video with camera rotation
+    async recordRotationVideo(durationSeconds = 4, fps = 30) {
+        if (!this.camera || !this.scene || !this.renderer) {
+            throw new Error('Viewer not initialized');
+        }
+        
+        // Get canvas stream
+        const stream = this.canvas.captureStream(fps);
+        const mediaRecorder = new MediaRecorder(stream, {
+            mimeType: 'video/webm;codecs=vp9',
+            videoBitsPerSecond: 5000000 // 5 Mbps
+        });
+        
+        // Fallback to webm if vp9 not supported
+        if (!MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+            mediaRecorder.mimeType = 'video/webm';
+        }
+        
+        const chunks = [];
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+                chunks.push(e.data);
+            }
+        };
+        
+        return new Promise((resolve, reject) => {
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                resolve(blob);
+            };
+            
+            mediaRecorder.onerror = (e) => {
+                reject(new Error('Recording failed: ' + e.error));
+            };
+            
+            // Get initial camera state
+            const initialPosition = this.camera.position.clone();
+            const sceneCenter = this.getSceneCenter();
+            const initialDistance = initialPosition.distanceTo(sceneCenter);
+            
+            // Calculate rotation range (90 degrees left to 90 degrees right = 180 degrees total)
+            const startAngle = -Math.PI / 2; // -90 degrees
+            const endAngle = Math.PI / 2;     // +90 degrees
+            const totalAngle = endAngle - startAngle;
+            
+            // Start recording
+            mediaRecorder.start();
+            
+            // Animate camera rotation
+            const startTime = performance.now();
+            const totalFrames = durationSeconds * fps;
+            let frameCount = 0;
+            
+            const animateRotation = () => {
+                const elapsed = (performance.now() - startTime) / 1000;
+                const progress = Math.min(elapsed / durationSeconds, 1);
+                
+                // Calculate angle (smooth easing)
+                const easeInOut = (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+                const easedProgress = easeInOut(progress);
+                const angle = startAngle + totalAngle * easedProgress;
+                
+                // Rotate camera around scene center
+                const radius = initialDistance;
+                const x = sceneCenter.x + radius * Math.cos(angle);
+                const z = sceneCenter.z + radius * Math.sin(angle);
+                const y = initialPosition.y; // Keep same height
+                
+                this.camera.position.set(x, y, z);
+                this.camera.lookAt(sceneCenter);
+                
+                // Render frame
+                this.renderer.render(this.scene, this.camera);
+                
+                frameCount++;
+                
+                if (progress < 1) {
+                    requestAnimationFrame(animateRotation);
+                } else {
+                    // Stop recording after animation completes
+                    setTimeout(() => {
+                        mediaRecorder.stop();
+                        stream.getTracks().forEach(track => track.stop());
+                    }, 100);
+                }
+            };
+            
+            // Start animation
+            animateRotation();
+        });
+    }
 }
 

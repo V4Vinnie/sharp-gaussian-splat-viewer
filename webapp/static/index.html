@@ -244,10 +244,10 @@
             <div class="info-panel" id="infoPanel" style="display: none;">
                 <strong>Navigation:</strong> Click and drag to rotate, scroll to zoom, or use the controls below
                 <div style="margin-top: 15px;">
-                    <button id="generateVideoBtn" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9em;">🎬 Generate Rotation Video (90° left/right)</button>
+                    <button id="generateVideoBtn" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9em;">🎬 Record Rotation Video (90° left/right) - Browser-based</button>
                 </div>
                 <div id="videoLoading" style="display: none; margin-top: 10px; color: #667eea;">
-                    Generating video... This may take a minute.
+                    Recording video... This will take about 4 seconds.
                 </div>
             </div>
 
@@ -264,7 +264,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-    <script src="/static/viewer.js?v=4"></script>
+    <script src="/static/viewer.js?v=5"></script>
     <script>
         const API_BASE = '';
         let sessionId = null;
