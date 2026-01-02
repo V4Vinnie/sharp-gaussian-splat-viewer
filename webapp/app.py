@@ -26,6 +26,8 @@ from sharp.models import PredictorParams, create_predictor
 from sharp.utils import io as sharp_io
 from sharp.utils import camera, gsplat
 from sharp.utils.gaussians import Gaussians3D, SceneMetaData, save_ply
+from sharp.cli.render import render_gaussians
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -309,6 +311,109 @@ def predict_image(
     )
     
     return gaussians
+
+
+@app.post("/api/generate-video")
+async def generate_video(session_id: str):
+    """Generate a video with 90-degree left/right rotation."""
+    if session_id not in gaussian_storage:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    gaussians, metadata = gaussian_storage[session_id]
+    
+    # Check for CUDA (required for rendering)
+    if not torch.cuda.is_available():
+        raise HTTPException(
+            status_code=503, 
+            detail="Video generation requires CUDA. Server-side rendering is not available on this system."
+        )
+    
+    try:
+        width, height = metadata.resolution_px
+        f_px = metadata.focal_length_px
+        
+        # Create trajectory params for rotation
+        # We'll use a custom trajectory that rotates 90 degrees left and right
+        params = camera.TrajectoryParams(
+            type="rotate",
+            num_steps=120,  # Smooth rotation
+            num_repeats=1,
+            max_disparity=0.08,  # This controls the rotation range
+        )
+        
+        # Calculate max offset for 90-degree rotation
+        # 90 degrees = 0.25 of full circle, so we need to adjust the trajectory
+        max_offset = camera.compute_max_offset(
+            gaussians, params, metadata.resolution_px, f_px
+        )
+        
+        # Create custom trajectory: rotate from -90 to +90 degrees
+        # We'll create a trajectory that goes from -0.25 to 0.25 of a full rotation
+        num_steps = 120
+        trajectory = []
+        for i in range(num_steps):
+            # t goes from -0.25 to 0.25 (90 degrees left to 90 degrees right)
+            t = (i / (num_steps - 1) - 0.5) * 0.5  # -0.25 to 0.25
+            x = max_offset[0] * np.sin(2 * np.pi * t)
+            y = max_offset[1] * np.cos(2 * np.pi * t)
+            z = 0.0
+            trajectory.append(torch.tensor([x, y, z], dtype=torch.float32))
+        
+        # Create temporary video file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            video_path = Path(tmp.name)
+        
+        device = torch.device("cuda")
+        
+        intrinsics = torch.tensor(
+            [
+                [f_px, 0, (width - 1) / 2.0, 0],
+                [0, f_px, (height - 1) / 2.0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1],
+            ],
+            device=device,
+            dtype=torch.float32,
+        )
+        
+        camera_model = camera.create_camera_model(
+            gaussians, intrinsics, resolution_px=metadata.resolution_px
+        )
+        
+        renderer = gsplat.GSplatRenderer(color_space=metadata.color_space)
+        video_writer = sharp_io.VideoWriter(video_path)
+        
+        logger.info(f"Rendering {len(trajectory)} frames for video...")
+        for i, eye_position in enumerate(trajectory):
+            if i % 20 == 0:
+                logger.info(f"Rendering frame {i}/{len(trajectory)}")
+            eye_tensor = eye_position.to(device)
+            camera_info = camera_model.compute(eye_tensor)
+            rendering_output = renderer(
+                gaussians.to(device),
+                extrinsics=camera_info.extrinsics[None].to(device),
+                intrinsics=camera_info.intrinsics[None].to(device),
+                image_width=camera_info.width,
+                image_height=camera_info.height,
+            )
+            color = (rendering_output.color[0].permute(1, 2, 0) * 255.0).to(dtype=torch.uint8)
+            depth = rendering_output.depth[0]
+            video_writer.add_frame(color, depth)
+        
+        video_writer.close()
+        logger.info(f"Video saved to {video_path}")
+        
+        # Return the video file
+        return FileResponse(
+            video_path,
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'attachment; filename="gaussian-rotation-{session_id}.mp4"',
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error generating video: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Mount static files

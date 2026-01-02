@@ -223,6 +223,16 @@
                 <div class="upload-text">Drop an image here or click to browse</div>
                 <div class="upload-hint">Supports JPG, PNG, and other common image formats</div>
                 <input type="file" id="fileInput" accept="image/*">
+                <button id="webcamBtn" style="margin-top: 15px; padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9em;">📷 Use Webcam</button>
+            </div>
+
+            <div id="webcamContainer" style="display: none; margin: 20px 0;">
+                <video id="webcamVideo" autoplay playsinline style="width: 100%; max-width: 640px; border-radius: 10px; background: #000;"></video>
+                <div style="margin-top: 15px; text-align: center;">
+                    <button id="captureBtn" style="padding: 12px 30px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1em; margin-right: 10px;">Capture Photo</button>
+                    <button id="cancelWebcamBtn" style="padding: 12px 30px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1em;">Cancel</button>
+                </div>
+                <canvas id="webcamCanvas" style="display: none;"></canvas>
             </div>
 
             <div class="loading" id="loading">
@@ -233,6 +243,12 @@
 
             <div class="info-panel" id="infoPanel" style="display: none;">
                 <strong>Navigation:</strong> Click and drag to rotate, scroll to zoom, or use the controls below
+                <div style="margin-top: 15px;">
+                    <button id="generateVideoBtn" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9em;">🎬 Generate Rotation Video (90° left/right)</button>
+                </div>
+                <div id="videoLoading" style="display: none; margin-top: 10px; color: #667eea;">
+                    Generating video... This may take a minute.
+                </div>
             </div>
 
             <div class="viewer-container" id="viewerContainer">
@@ -248,7 +264,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-    <script src="/static/viewer.js?v=3"></script>
+    <script src="/static/viewer.js?v=4"></script>
     <script>
         const API_BASE = '';
         let sessionId = null;
@@ -405,6 +421,51 @@
             }
         }
         
+        // Video generation
+        const generateVideoBtn = document.getElementById('generateVideoBtn');
+        const videoLoading = document.getElementById('videoLoading');
+        
+        generateVideoBtn.addEventListener('click', async () => {
+            if (!sessionId) {
+                showError('Please upload an image first');
+                return;
+            }
+            
+            generateVideoBtn.disabled = true;
+            videoLoading.style.display = 'block';
+            hideError();
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/generate-video?session_id=${sessionId}`, {
+                    method: 'POST',
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to generate video');
+                }
+                
+                // Download the video
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `gaussian-splat-rotation-${sessionId}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                
+                videoLoading.style.display = 'none';
+                generateVideoBtn.disabled = false;
+            } catch (err) {
+                console.error('Error generating video:', err);
+                showError(err.message || 'Failed to generate video. Make sure CUDA is available on the server.');
+                videoLoading.style.display = 'none';
+                generateVideoBtn.disabled = false;
+            }
+        });
+        
         // Update camera info periodically and on camera changes
         setInterval(updateCameraInfo, 100);
         
@@ -412,6 +473,61 @@
         if (viewer && viewer.controls) {
             viewer.controls.addEventListener('change', updateCameraInfo);
         }
+
+        // Webcam functionality
+        let webcamStream = null;
+        const webcamBtn = document.getElementById('webcamBtn');
+        const webcamContainer = document.getElementById('webcamContainer');
+        const webcamVideo = document.getElementById('webcamVideo');
+        const webcamCanvas = document.getElementById('webcamCanvas');
+        const captureBtn = document.getElementById('captureBtn');
+        const cancelWebcamBtn = document.getElementById('cancelWebcamBtn');
+
+        webcamBtn.addEventListener('click', async () => {
+            try {
+                webcamStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: 'user',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    } 
+                });
+                webcamVideo.srcObject = webcamStream;
+                webcamContainer.style.display = 'block';
+                uploadArea.style.display = 'none';
+            } catch (err) {
+                showError('Failed to access webcam: ' + err.message);
+            }
+        });
+
+        captureBtn.addEventListener('click', () => {
+            const ctx = webcamCanvas.getContext('2d');
+            webcamCanvas.width = webcamVideo.videoWidth;
+            webcamCanvas.height = webcamVideo.videoHeight;
+            ctx.drawImage(webcamVideo, 0, 0);
+            
+            webcamCanvas.toBlob(async (blob) => {
+                if (webcamStream) {
+                    webcamStream.getTracks().forEach(track => track.stop());
+                    webcamStream = null;
+                }
+                webcamContainer.style.display = 'none';
+                uploadArea.style.display = 'block';
+                
+                // Create a File object from the blob
+                const file = new File([blob], 'webcam-capture.jpg', { type: 'image/jpeg' });
+                await handleFile(file);
+            }, 'image/jpeg', 0.95);
+        });
+
+        cancelWebcamBtn.addEventListener('click', () => {
+            if (webcamStream) {
+                webcamStream.getTracks().forEach(track => track.stop());
+                webcamStream = null;
+            }
+            webcamContainer.style.display = 'none';
+            uploadArea.style.display = 'block';
+        });
 
         function showError(message) {
             error.textContent = message;
