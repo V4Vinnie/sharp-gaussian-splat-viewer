@@ -426,41 +426,50 @@
         const videoLoading = document.getElementById('videoLoading');
         
         generateVideoBtn.addEventListener('click', async () => {
-            if (!sessionId) {
-                showError('Please upload an image first');
+            if (!viewer || !sessionId) {
+                showError('Please upload an image and wait for it to load first');
+                return;
+            }
+            
+            if (!viewer.points || viewer.points.geometry.attributes.position.count === 0) {
+                showError('No 3D scene loaded. Please upload an image first.');
+                return;
+            }
+            
+            // Check if MediaRecorder is supported
+            if (!window.MediaRecorder) {
+                showError('Video recording is not supported in this browser. Please use Chrome, Firefox, or Edge.');
                 return;
             }
             
             generateVideoBtn.disabled = true;
             videoLoading.style.display = 'block';
+            videoLoading.textContent = 'Recording video... This will take about 4 seconds.';
             hideError();
             
             try {
-                const response = await fetch(`${API_BASE}/api/generate-video?session_id=${sessionId}`, {
-                    method: 'POST',
-                });
+                // Record the rotation video (4 seconds, 30 fps)
+                const videoBlob = await viewer.recordRotationVideo(4, 30);
                 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Failed to generate video');
-                }
-                
-                // Download the video
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
+                // Convert WebM to MP4 if needed, or just download as WebM
+                // Note: WebM is widely supported and works in most browsers
+                const url = window.URL.createObjectURL(videoBlob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `gaussian-splat-rotation-${sessionId}.mp4`;
+                a.download = `gaussian-splat-rotation-${sessionId}.webm`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
                 
-                videoLoading.style.display = 'none';
+                videoLoading.textContent = 'Video downloaded!';
+                setTimeout(() => {
+                    videoLoading.style.display = 'none';
+                }, 2000);
                 generateVideoBtn.disabled = false;
             } catch (err) {
                 console.error('Error generating video:', err);
-                showError(err.message || 'Failed to generate video. Make sure CUDA is available on the server.');
+                showError(err.message || 'Failed to generate video. Please try again.');
                 videoLoading.style.display = 'none';
                 generateVideoBtn.disabled = false;
             }
