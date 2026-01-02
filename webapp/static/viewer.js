@@ -1041,17 +1041,28 @@ class GaussianSplatViewer {
             throw new Error('Viewer not initialized');
         }
         
+        // Disable user controls during recording
+        const originalMouseState = this.mouseState ? { ...this.mouseState } : null;
+        if (this.mouseState) {
+            this.mouseState.isDown = false;
+        }
+        
         // Get canvas stream
         const stream = this.canvas.captureStream(fps);
+        
+        // Try different codec options
+        let mimeType = 'video/webm;codecs=vp9';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'video/webm;codecs=vp8';
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+                mimeType = 'video/webm';
+            }
+        }
+        
         const mediaRecorder = new MediaRecorder(stream, {
-            mimeType: 'video/webm;codecs=vp9',
+            mimeType: mimeType,
             videoBitsPerSecond: 5000000 // 5 Mbps
         });
-        
-        // Fallback to webm if vp9 not supported
-        if (!MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-            mediaRecorder.mimeType = 'video/webm';
-        }
         
         const chunks = [];
         mediaRecorder.ondataavailable = (e) => {
@@ -1062,12 +1073,20 @@ class GaussianSplatViewer {
         
         return new Promise((resolve, reject) => {
             mediaRecorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'video/webm' });
+                // Restore mouse state
+                if (originalMouseState && this.mouseState) {
+                    this.mouseState = originalMouseState;
+                }
+                const blob = new Blob(chunks, { type: mimeType });
                 resolve(blob);
             };
             
             mediaRecorder.onerror = (e) => {
-                reject(new Error('Recording failed: ' + e.error));
+                // Restore mouse state
+                if (originalMouseState && this.mouseState) {
+                    this.mouseState = originalMouseState;
+                }
+                reject(new Error('Recording failed: ' + (e.error || 'Unknown error')));
             };
             
             // Get initial camera state
@@ -1085,8 +1104,7 @@ class GaussianSplatViewer {
             
             // Animate camera rotation
             const startTime = performance.now();
-            const totalFrames = durationSeconds * fps;
-            let frameCount = 0;
+            let animationId = null;
             
             const animateRotation = () => {
                 const elapsed = (performance.now() - startTime) / 1000;
@@ -1097,8 +1115,8 @@ class GaussianSplatViewer {
                 const easedProgress = easeInOut(progress);
                 const angle = startAngle + totalAngle * easedProgress;
                 
-                // Rotate camera around scene center
-                const radius = initialDistance;
+                // Rotate camera around scene center in XZ plane (horizontal rotation)
+                const radius = Math.max(initialDistance, 1.0); // Ensure minimum radius
                 const x = sceneCenter.x + radius * Math.cos(angle);
                 const z = sceneCenter.z + radius * Math.sin(angle);
                 const y = initialPosition.y; // Keep same height
@@ -1109,16 +1127,17 @@ class GaussianSplatViewer {
                 // Render frame
                 this.renderer.render(this.scene, this.camera);
                 
-                frameCount++;
-                
                 if (progress < 1) {
-                    requestAnimationFrame(animateRotation);
+                    animationId = requestAnimationFrame(animateRotation);
                 } else {
                     // Stop recording after animation completes
                     setTimeout(() => {
                         mediaRecorder.stop();
                         stream.getTracks().forEach(track => track.stop());
-                    }, 100);
+                        if (animationId) {
+                            cancelAnimationFrame(animationId);
+                        }
+                    }, 200); // Give a bit more time for final frame
                 }
             };
             
